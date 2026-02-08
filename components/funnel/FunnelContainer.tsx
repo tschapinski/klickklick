@@ -6,12 +6,12 @@ import {
     StepId,
     FunnelAnswers,
     getStep,
-    getNextStep,
     TOTAL_STEPS,
     Option
 } from '@/lib/questions';
-import { getRecommendedProducts } from '@/lib/recommendation';
+import { getRecommendedProducts, searchProducts } from '@/lib/recommendation';
 import { QuestionCard } from './QuestionCard';
+import { SearchCard } from './SearchCard';
 import ResultCard from './ResultCard';
 import { ChevronLeft } from 'lucide-react';
 
@@ -23,7 +23,7 @@ interface FunnelState {
 }
 
 const initialState: FunnelState = {
-    currentStepId: 'suggestive', // Start at Step 0
+    currentStepId: 'suggestive',
     answers: {},
     history: [],
     isTransitioning: false
@@ -41,6 +41,7 @@ const breathingAnimation = {
 
 export default function FunnelContainer() {
     const [state, setState] = useState<FunnelState>(initialState);
+    const [searchResults, setSearchResults] = useState<ReturnType<typeof searchProducts> | null>(null);
 
     // Broadcast height changes for Iframe resizing
     useEffect(() => {
@@ -49,10 +50,8 @@ export default function FunnelContainer() {
             window.parent.postMessage({ type: 'resize', height }, '*');
         };
 
-        // Send initial height
         sendHeight();
 
-        // Send height on resize and mutation
         window.addEventListener('resize', sendHeight);
         const observer = new ResizeObserver(sendHeight);
         observer.observe(document.body);
@@ -61,7 +60,7 @@ export default function FunnelContainer() {
             window.removeEventListener('resize', sendHeight);
             observer.disconnect();
         };
-    }, [state.currentStepId, state.isTransitioning]);
+    }, [state.currentStepId, state.isTransitioning, searchResults]);
 
     const handleAnswer = useCallback((option: Option) => {
         const step = getStep(state.currentStepId);
@@ -79,24 +78,33 @@ export default function FunnelContainer() {
             }
         } else if (state.currentStepId === 'format') {
             newAnswers.format = optionId as 'audio' | 'video';
-        } else if (state.currentStepId === 'audio_focus') {
-            if (option.tags?.deepDive) {
-                newAnswers.deepDive = option.tags.deepDive;
-            }
-        } else if (state.currentStepId === 'audio_linderung' || state.currentStepId === 'audio_change') {
+        } else if (state.currentStepId === 'audio_category') {
+            newAnswers.category = optionId as FunnelAnswers['category'];
+        } else if (state.currentStepId === 'audio_krankheit') {
+            // Body Region selection (Krankheiten) 
+            newAnswers.region = optionId;
+            newAnswers.specific = optionId;
+        } else if (state.currentStepId.startsWith('audio_symptom_')) {
+            // Symptom selection
+            newAnswers.symptom = optionId;
+        } else if (state.currentStepId.startsWith('audio_') && state.currentStepId !== 'audio_category' && state.currentStepId !== 'audio_search') {
+            // Specific Topic
             newAnswers.specific = optionId;
         } else if (state.currentStepId === 'video_focus') {
-            // For video, focus might dictate category or specific path
-            if (optionId === 'v_weight') newAnswers.category = 'weight';
-            // For direct recommendations (The Key, Heile Dich), we might set specific here or let recommendation logic handle it
-            if (optionId === 'the_key' || optionId === 'heile_dich') newAnswers.specific = optionId;
+            if (optionId === 'v_weight') {
+                // Weight path
+            }
+            if (optionId === 'the_key' || optionId === 'heile_dich_workshop') {
+                newAnswers.specific = optionId;
+            }
+        } else if (state.currentStepId === 'video_weight') {
+            newAnswers.specific = optionId;
         } else {
-            // Catch-all for final specific steps
             newAnswers.specific = optionId;
         }
 
         // 2. Determine Next Step
-        const nextStepId = getNextStep(state.currentStepId, optionId);
+        const nextStepId = option.nextStep || 'result';
 
         // 3. Transition
         setState(prev => ({ ...prev, isTransitioning: true }));
@@ -108,15 +116,35 @@ export default function FunnelContainer() {
                 history: [...prev.history, prev.currentStepId],
                 isTransitioning: false
             }));
-        }, 400); // 0.4s delay for smooth transition
+        }, 400);
 
     }, [state]);
+
+    // Handle search submission
+    const handleSearch = useCallback((query: string) => {
+        const newAnswers = { ...state.answers, searchQuery: query };
+        const results = searchProducts(query);
+        setSearchResults(results);
+
+        setState(prev => ({ ...prev, isTransitioning: true }));
+
+        setTimeout(() => {
+            setState(prev => ({
+                currentStepId: 'result',
+                answers: newAnswers,
+                history: [...prev.history, prev.currentStepId],
+                isTransitioning: false
+            }));
+        }, 400);
+    }, [state.answers]);
 
     const handleBack = useCallback(() => {
         if (state.history.length === 0) return;
 
         const newHistory = [...state.history];
         const prevStepId = newHistory.pop();
+
+        setSearchResults(null); // Clear search results when going back
 
         setState(prev => ({
             ...prev,
@@ -128,6 +156,7 @@ export default function FunnelContainer() {
 
     const handleReset = useCallback(() => {
         setState(initialState);
+        setSearchResults(null);
     }, []);
 
     // Current Step Data
@@ -135,7 +164,6 @@ export default function FunnelContainer() {
 
     // Dynamic Text Adjustment for Step 1 based on Step 0
     if (state.currentStepId === 'format' && state.answers.commitment) {
-        // Clone step to avoid mutating global object
         currentStep = { ...currentStep };
         if (state.answers.commitment === 'BEREIT') {
             currentStep.subtext = "Du hast den ersten Schritt gewagt. Jetzt wähle deinen Weg.";
@@ -146,14 +174,17 @@ export default function FunnelContainer() {
 
     // Result View
     if (state.currentStepId === 'result') {
-        const products = getRecommendedProducts(state.answers);
+        // Use search results if available, otherwise use regular recommendation
+        const products = searchResults || getRecommendedProducts(state.answers);
         return <ResultCard products={products} answers={state.answers} onReset={handleReset} />;
     }
 
     // Progress Calculation
-    // Step 0 is 0%, Step 1 is 25%, etc.
     const currentStepNum = currentStep ? currentStep.stepNumber : 0;
     const progress = (currentStepNum / TOTAL_STEPS) * 100;
+
+    // Check if this is a search step
+    const isSearchStep = currentStep?.isSearchStep || false;
 
     return (
         <div className="w-full max-w-2xl mx-auto flex flex-col min-h-[600px]">
@@ -176,12 +207,8 @@ export default function FunnelContainer() {
                 ) : (
                     <div />
                 )}
-
-                {/* Hide step count on Step 0 for more immersion */}
-                {/* Hide step count */}
                 <div />
-
-                <div /> {/* Spacer */}
+                <div />
             </div>
 
             {/* Progress Bar (Hidden on Step 0) */}
@@ -208,10 +235,22 @@ export default function FunnelContainer() {
                             transition={{ duration: 0.4, ease: "easeOut" }}
                             className="w-full"
                         >
-                            <QuestionCard
-                                step={currentStep}
-                                onSelect={handleAnswer}
-                            />
+                            {isSearchStep ? (
+                                <SearchCard
+                                    question={currentStep.question}
+                                    subtext={currentStep.subtext}
+                                    hint={currentStep.hint}
+                                    onSearch={handleSearch}
+                                    onBack={handleBack}
+                                    stepNumber={currentStepNum}
+                                    totalSteps={TOTAL_STEPS}
+                                />
+                            ) : (
+                                <QuestionCard
+                                    step={currentStep}
+                                    onSelect={handleAnswer}
+                                />
+                            )}
                         </motion.div>
                     )}
                 </AnimatePresence>
