@@ -87,7 +87,7 @@ export default function FunnelContainer() {
         } else if (state.currentStepId.startsWith('audio_symptom_')) {
             // Symptom selection
             newAnswers.symptom = optionId;
-        } else if (state.currentStepId.startsWith('audio_') && state.currentStepId !== 'audio_category' && state.currentStepId !== 'audio_search') {
+        } else if (state.currentStepId.startsWith('audio_') && state.currentStepId !== 'audio_search') {
             // Specific Topic
             newAnswers.specific = optionId;
         } else if (state.currentStepId === 'video_focus') {
